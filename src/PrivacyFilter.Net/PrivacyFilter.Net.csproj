@@ -1,0 +1,48 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <Optimize>true</Optimize>
+    <LangVersion>latest</LangVersion>
+    <RootNamespace>PrivacyFilterNet</RootNamespace>
+    <AssemblyName>PrivacyFilter.Net</AssemblyName>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+  </PropertyGroup>
+
+  <PropertyGroup Label="Packaging">
+    <PackageId>PrivacyFilter.Net</PackageId>
+    <Version>0.1.0</Version>
+    <EnablePackageValidation>true</EnablePackageValidation>
+    <Authors>ericstj</Authors>
+    <Description>Managed .NET inference API for OpenAI Privacy Filter, using the official ONNX model with o200k_base tokenization and constrained BIOES decoding.</Description>
+    <PackageTags>privacy;pii;redaction;token-classification;onnx;nlp;machine-learning</PackageTags>
+    <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageProjectUrl>https://github.com/ericstj/PrivacyFilter.Net</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/ericstj/PrivacyFilter.Net</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PublishRepositoryUrl>true</PublishRepositoryUrl>
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+    <EmbedUntrackedSources>true</EmbedUntrackedSources>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="..\..\README.md" Pack="true" PackagePath="\" Link="README.md" />
+    <None Include="..\..\THIRD-PARTY-NOTICES.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="PrivacyFilter.Net.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.ML.OnnxRuntime" />
+    <PackageReference Include="Microsoft.ML.Tokenizers" />
+    <PackageReference Include="Microsoft.ML.Tokenizers.Data.O200kBase" />
+    <PackageReference Include="Microsoft.Bcl.Memory" />
+  </ItemGroup>
+
+</Project>

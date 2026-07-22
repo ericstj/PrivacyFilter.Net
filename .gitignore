@@ -1,0 +1,12 @@
+# Build artifacts
+bin/
+obj/
+artifacts/
+BenchmarkDotNet.Artifacts/
+
+# Downloaded model artifacts
+*.onnx_data
+/models/
+
+# Python oracle helpers
+__pycache__/
