@@ -13,8 +13,9 @@
 
   <PropertyGroup Label="Packaging">
     <PackageId>PrivacyFilter.Net</PackageId>
-    <Version>0.1.0</Version>
+    <Version>0.1.1</Version>
     <EnablePackageValidation>true</EnablePackageValidation>
+    <PackageValidationBaselineVersion>0.1.0</PackageValidationBaselineVersion>
     <Authors>ericstj</Authors>
     <Description>Managed .NET inference API for OpenAI Privacy Filter, using the official ONNX model with o200k_base tokenization and constrained BIOES decoding.</Description>
     <PackageTags>privacy;pii;redaction;token-classification;onnx;nlp;machine-learning</PackageTags>
