@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Text.Json;
 
 namespace PrivacyFilterNet;
@@ -19,6 +20,8 @@ internal sealed class ViterbiDecoder
     private readonly LabelSpace _labels;
     private readonly float[] _startScores;
     private readonly float[] _endScores;
+    private readonly int[] _predecessorOffsets;
+    private readonly byte[] _predecessors;
     private readonly float[] _transitionScores;
 
     public ViterbiDecoder(LabelSpace labels, string? calibrationPath)
@@ -26,9 +29,20 @@ internal sealed class ViterbiDecoder
         _labels = labels;
         ViterbiBiases biases = ViterbiBiases.Load(calibrationPath);
         int classCount = labels.TokenClassNames.Length;
+        if (classCount > byte.MaxValue + 1)
+        {
+            throw new InvalidDataException("Viterbi decoding supports at most 256 token classes.");
+        }
+
         _startScores = Enumerable.Repeat(NegativeInfinity, classCount).ToArray();
         _endScores = Enumerable.Repeat(NegativeInfinity, classCount).ToArray();
-        _transitionScores = Enumerable.Repeat(NegativeInfinity, classCount * classCount).ToArray();
+        var validPredecessors = new List<byte>[classCount];
+        var validTransitionScores = new List<float>[classCount];
+        for (int next = 0; next < classCount; next++)
+        {
+            validPredecessors[next] = [];
+            validTransitionScores[next] = [];
+        }
 
         for (int previous = 0; previous < classCount; previous++)
         {
@@ -50,14 +64,30 @@ internal sealed class ViterbiDecoder
                 int nextSpan = labels.TokenToSpanLabel[next];
                 if (IsValidTransition(previous, previousTag, previousSpan, next, nextTag, nextSpan))
                 {
-                    _transitionScores[(previous * classCount) + next] =
-                        TransitionBias(previous, previousTag, previousSpan, next, nextTag, nextSpan, biases);
+                    validPredecessors[next].Add((byte)previous);
+                    validTransitionScores[next].Add(
+                        TransitionBias(previous, previousTag, previousSpan, next, nextTag, nextSpan, biases));
                 }
             }
         }
+
+        _predecessorOffsets = new int[classCount + 1];
+        for (int next = 0; next < classCount; next++)
+        {
+            _predecessorOffsets[next + 1] =
+                _predecessorOffsets[next] + validPredecessors[next].Count;
+        }
+
+        _predecessors = new byte[_predecessorOffsets[^1]];
+        _transitionScores = new float[_predecessors.Length];
+        for (int next = 0; next < classCount; next++)
+        {
+            validPredecessors[next].CopyTo(_predecessors, _predecessorOffsets[next]);
+            validTransitionScores[next].CopyTo(_transitionScores, _predecessorOffsets[next]);
+        }
     }
 
-    public int[] Decode(float[] emissions, int tokenCount)
+    public int[] Decode(ReadOnlySpan<float> emissions, int tokenCount)
     {
         int classCount = _labels.TokenClassNames.Length;
         if (emissions.Length != tokenCount * classCount)
@@ -70,61 +100,80 @@ internal sealed class ViterbiDecoder
             return [];
         }
 
-        var previousScores = new float[classCount];
-        var nextScores = new float[classCount];
-        var backpointers = new int[Math.Max(0, tokenCount - 1) * classCount];
-        for (int label = 0; label < classCount; label++)
+        Span<float> previousScores = stackalloc float[classCount];
+        Span<float> nextScores = stackalloc float[classCount];
+        int backpointerCount = Math.Max(0, tokenCount - 1) * classCount;
+        byte[]? backpointerBuffer =
+            backpointerCount == 0 ? null : ArrayPool<byte>.Shared.Rent(backpointerCount);
+        Span<byte> backpointers = backpointerBuffer.AsSpan(0, backpointerCount);
+        try
         {
-            previousScores[label] = emissions[label] + _startScores[label];
-        }
-
-        for (int token = 1; token < tokenCount; token++)
-        {
-            int emissionOffset = token * classCount;
-            int backpointerOffset = (token - 1) * classCount;
-            for (int next = 0; next < classCount; next++)
+            for (int label = 0; label < classCount; label++)
             {
-                float bestScore = float.NegativeInfinity;
-                int bestPrevious = 0;
-                for (int previous = 0; previous < classCount; previous++)
+                previousScores[label] = emissions[label] + _startScores[label];
+            }
+
+            for (int token = 1; token < tokenCount; token++)
+            {
+                int emissionOffset = token * classCount;
+                int backpointerOffset = (token - 1) * classCount;
+                for (int next = 0; next < classCount; next++)
                 {
-                    float score = previousScores[previous] +
-                        _transitionScores[(previous * classCount) + next];
-                    if (score > bestScore)
+                    float bestScore = float.NegativeInfinity;
+                    byte bestPrevious = 0;
+                    int predecessorEnd = _predecessorOffsets[next + 1];
+                    for (int predecessorIndex = _predecessorOffsets[next];
+                         predecessorIndex < predecessorEnd;
+                         predecessorIndex++)
                     {
-                        bestScore = score;
-                        bestPrevious = previous;
+                        byte previous = _predecessors[predecessorIndex];
+                        float score = previousScores[previous] +
+                            _transitionScores[predecessorIndex];
+                        if (score > bestScore)
+                        {
+                            bestScore = score;
+                            bestPrevious = previous;
+                        }
                     }
+
+                    nextScores[next] = bestScore + emissions[emissionOffset + next];
+                    backpointers[backpointerOffset + next] = bestPrevious;
                 }
 
-                nextScores[next] = bestScore + emissions[emissionOffset + next];
-                backpointers[backpointerOffset + next] = bestPrevious;
+                Span<float> temporaryScores = previousScores;
+                previousScores = nextScores;
+                nextScores = temporaryScores;
             }
 
-            (previousScores, nextScores) = (nextScores, previousScores);
-        }
-
-        int lastLabel = 0;
-        float bestFinalScore = float.NegativeInfinity;
-        for (int label = 0; label < classCount; label++)
-        {
-            float score = previousScores[label] + _endScores[label];
-            if (score > bestFinalScore)
+            int lastLabel = 0;
+            float bestFinalScore = float.NegativeInfinity;
+            for (int label = 0; label < classCount; label++)
             {
-                bestFinalScore = score;
-                lastLabel = label;
+                float score = previousScores[label] + _endScores[label];
+                if (score > bestFinalScore)
+                {
+                    bestFinalScore = score;
+                    lastLabel = label;
+                }
+            }
+
+            var path = new int[tokenCount];
+            path[^1] = lastLabel;
+            for (int token = tokenCount - 2; token >= 0; token--)
+            {
+                lastLabel = backpointers[(token * classCount) + lastLabel];
+                path[token] = lastLabel;
+            }
+
+            return path;
+        }
+        finally
+        {
+            if (backpointerBuffer is not null)
+            {
+                ArrayPool<byte>.Shared.Return(backpointerBuffer, clearArray: true);
             }
         }
-
-        var path = new int[tokenCount];
-        path[^1] = lastLabel;
-        for (int token = tokenCount - 2; token >= 0; token--)
-        {
-            lastLabel = backpointers[(token * classCount) + lastLabel];
-            path[token] = lastLabel;
-        }
-
-        return path;
     }
 
     private bool IsValidTransition(
