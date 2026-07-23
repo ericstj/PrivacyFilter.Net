@@ -1,3 +1,4 @@
+using System.Buffers;
 using Microsoft.ML.OnnxRuntime;
 using Microsoft.ML.OnnxRuntime.Tensors;
 
@@ -94,18 +95,29 @@ public sealed class PrivacyFilter : IDisposable
             return BuildResult(tokenized, []);
         }
 
-        float[] logProbabilities = RunModel(tokenized.TokenIds);
-        int[] decodedLabels = _options.DecodeMode == PrivacyFilterDecodeMode.Viterbi
-            ? _viterbi.Decode(logProbabilities, tokenized.TokenIds.Length)
-            : ArgMax(logProbabilities, tokenized.TokenIds.Length, _labels.TokenClassNames.Length);
-        List<PrivacyFilterSpan> spans = SpanDecoder.Decode(
-            decodedLabels,
-            _labels,
-            tokenized,
-            _options.TrimWhitespace,
-            _options.DiscardOverlappingSpans,
-            _options.OutputMode);
-        return BuildResult(tokenized, spans);
+        int classCount = _labels.TokenClassNames.Length;
+        int scoreCount = checked(tokenized.TokenIds.Length * classCount);
+        float[] scoreBuffer = ArrayPool<float>.Shared.Rent(scoreCount);
+        try
+        {
+            Span<float> scores = scoreBuffer.AsSpan(0, scoreCount);
+            RunModel(tokenized.TokenIds, scores);
+            int[] decodedLabels = _options.DecodeMode == PrivacyFilterDecodeMode.Viterbi
+                ? _viterbi.Decode(scores, tokenized.TokenIds.Length)
+                : ArgMax(scores, tokenized.TokenIds.Length, classCount);
+            List<PrivacyFilterSpan> spans = SpanDecoder.Decode(
+                decodedLabels,
+                _labels,
+                tokenized,
+                _options.TrimWhitespace,
+                _options.DiscardOverlappingSpans,
+                _options.OutputMode);
+            return BuildResult(tokenized, spans);
+        }
+        finally
+        {
+            ArrayPool<float>.Shared.Return(scoreBuffer, clearArray: true);
+        }
     }
 
     /// <summary>Detects private spans and returns only the redacted text.</summary>
@@ -123,60 +135,81 @@ public sealed class PrivacyFilter : IDisposable
         _disposed = true;
     }
 
-    private float[] RunModel(int[] tokenIds)
+    private void RunModel(int[] tokenIds, Span<float> scores)
     {
         int classCount = _labels.TokenClassNames.Length;
-        var allLogProbabilities = new float[tokenIds.Length * classCount];
+        if (scores.Length != tokenIds.Length * classCount)
+        {
+            throw new ArgumentException("Score dimensions do not match the token input.", nameof(scores));
+        }
+
         for (int windowStart = 0;
              windowStart < tokenIds.Length;
              windowStart += _options.ContextWindowLength)
         {
             int windowLength = Math.Min(_options.ContextWindowLength, tokenIds.Length - windowStart);
-            var ids = new long[windowLength];
-            var mask = new long[windowLength];
-            for (int index = 0; index < windowLength; index++)
+            long[] ids = ArrayPool<long>.Shared.Rent(windowLength);
+            long[] mask = ArrayPool<long>.Shared.Rent(windowLength);
+            try
             {
-                ids[index] = tokenIds[windowStart + index];
-                mask[index] = 1;
-            }
+                for (int index = 0; index < windowLength; index++)
+                {
+                    ids[index] = tokenIds[windowStart + index];
+                    mask[index] = 1;
+                }
 
-            var idTensor = new DenseTensor<long>(ids, [1, windowLength]);
-            var maskTensor = new DenseTensor<long>(mask, [1, windowLength]);
-            using IDisposableReadOnlyCollection<DisposableNamedOnnxValue> results = _session.Run(
-            [
-                NamedOnnxValue.CreateFromTensor("input_ids", idTensor),
-                NamedOnnxValue.CreateFromTensor("attention_mask", maskTensor),
-            ]);
-            DisposableNamedOnnxValue? logitsValue =
-                results.FirstOrDefault(result => result.Name == "logits");
-            if (logitsValue is null)
+                var idTensor = new DenseTensor<long>(
+                    ids.AsMemory(0, windowLength),
+                    [1, windowLength]);
+                var maskTensor = new DenseTensor<long>(
+                    mask.AsMemory(0, windowLength),
+                    [1, windowLength]);
+                using IDisposableReadOnlyCollection<DisposableNamedOnnxValue> results = _session.Run(
+                [
+                    NamedOnnxValue.CreateFromTensor("input_ids", idTensor),
+                    NamedOnnxValue.CreateFromTensor("attention_mask", maskTensor),
+                ]);
+                DisposableNamedOnnxValue? logitsValue =
+                    results.FirstOrDefault(result => result.Name == "logits");
+                if (logitsValue is null)
+                {
+                    throw new InvalidDataException("The ONNX model did not return logits.");
+                }
+
+                Tensor<float> logits = logitsValue.AsTensor<float>();
+                if (logits.Dimensions.Length != 3 ||
+                    logits.Dimensions[0] != 1 ||
+                    logits.Dimensions[1] != windowLength ||
+                    logits.Dimensions[2] != classCount)
+                {
+                    throw new InvalidDataException(
+                        $"The ONNX logits shape must be [1,{windowLength},{classCount}].");
+                }
+
+                int scoreOffset = windowStart * classCount;
+                int windowScoreCount = windowLength * classCount;
+                Span<float> windowScores = scores.Slice(scoreOffset, windowScoreCount);
+                if (logits is DenseTensor<float> denseLogits)
+                {
+                    denseLogits.Buffer.Span.CopyTo(windowScores);
+                }
+                else
+                {
+                    for (int index = 0; index < windowScoreCount; index++)
+                    {
+                        windowScores[index] = logits.GetValue(index);
+                    }
+                }
+            }
+            finally
             {
-                throw new InvalidDataException("The ONNX model did not return logits.");
+                ArrayPool<long>.Shared.Return(ids, clearArray: true);
+                ArrayPool<long>.Shared.Return(mask, clearArray: true);
             }
-
-            Tensor<float> logits = logitsValue.AsTensor<float>();
-            if (logits.Dimensions.Length != 3 ||
-                logits.Dimensions[0] != 1 ||
-                logits.Dimensions[1] != windowLength ||
-                logits.Dimensions[2] != classCount)
-            {
-                throw new InvalidDataException(
-                    $"The ONNX logits shape must be [1,{windowLength},{classCount}].");
-            }
-
-            float[] values = logits.ToArray();
-            LogSoftmax(
-                values,
-                allLogProbabilities,
-                sourceTokenCount: windowLength,
-                classCount,
-                destinationTokenOffset: windowStart);
         }
-
-        return allLogProbabilities;
     }
 
-    private static void LogSoftmax(
+    internal static void LogSoftmax(
         float[] source,
         float[] destination,
         int sourceTokenCount,
@@ -208,7 +241,7 @@ public sealed class PrivacyFilter : IDisposable
         }
     }
 
-    private static int[] ArgMax(float[] scores, int tokenCount, int classCount)
+    internal static int[] ArgMax(ReadOnlySpan<float> scores, int tokenCount, int classCount)
     {
         var labels = new int[tokenCount];
         for (int token = 0; token < tokenCount; token++)

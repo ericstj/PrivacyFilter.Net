@@ -38,6 +38,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <InternalsVisibleTo Include="PrivacyFilter.Net.Benchmarks" />
     <InternalsVisibleTo Include="PrivacyFilter.Net.Tests" />
   </ItemGroup>
 

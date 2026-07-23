@@ -16,6 +16,34 @@ Measured 2026-07-21 on Windows 11 with an Intel Core i7-13800H (14 physical,
 | Short text | 356.6 ms | 10.82 ms | 16.6 KB |
 | Long text (50 copies) | 2,048.4 ms | 22.09 ms | 644.85 KB |
 
+## Managed postprocessing optimization
+
+Measured 2026-07-22 with 4,096 tokens and 33 classes. The dense and sparse
+Viterbi implementations used the same nontrivial score input.
+
+| Workload | Mean | Managed allocation | Relative time |
+| --- | ---: | ---: | ---: |
+| Log-softmax removed from production | 1.093 ms | 0 B | - |
+| Dense Viterbi baseline | 4.527 ms | 544.28 KB | 1.00x |
+| Sparse Viterbi with pooled backpointers | 2.065 ms | 16.02 KB | 0.46x |
+
+Sparse valid-predecessor tables reduced Viterbi time by 54% and managed
+allocation by 97%. Decoding raw logits also removes the separate log-softmax
+pass without changing argmax or Viterbi results.
+
+The end-to-end comparison used 5 warmups and 10 measurement iterations for
+each implementation:
+
+| Workload | Before | After | Allocation before | Allocation after |
+| --- | ---: | ---: | ---: | ---: |
+| Short text | 234.4 ms | 232.6 ms | 16.69 KB | 7.93 KB |
+| Long text (50 copies) | 1,048.7 ms | 1,078.4 ms | 644.85 KB | 222.09 KB |
+
+End-to-end latency remained effectively model-bound: the short workload
+improved by 0.8%, while the noisier long workload measured 2.8% slower with
+overlapping confidence intervals. Managed allocation fell by 52% and 66%,
+respectively.
+
 ## Same-model Python comparison
 
 For an apples-to-apples model comparison, a Python harness ran the same

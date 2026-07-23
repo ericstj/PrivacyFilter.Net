@@ -23,6 +23,68 @@ public sealed class DecoderTests
     }
 
     [Fact]
+    public void DecodersAreInvariantToLogSoftmax()
+    {
+        LabelSpace labels = LabelSpace.Create(ClassNames);
+        var decoder = new ViterbiDecoder(labels, calibrationPath: null);
+        int classCount = ClassNames.Length;
+        var random = new Random(42);
+
+        for (int testCase = 0; testCase < 128; testCase++)
+        {
+            int tokenCount = random.Next(1, 65);
+            var logits = new float[tokenCount * classCount];
+            for (int index = 0; index < logits.Length; index++)
+            {
+                logits[index] = (random.NextSingle() * 40) - 20;
+            }
+
+            var logProbabilities = new float[logits.Length];
+            PrivacyFilter.LogSoftmax(
+                logits,
+                logProbabilities,
+                tokenCount,
+                classCount,
+                destinationTokenOffset: 0);
+
+            Assert.Equal(
+                decoder.Decode(logProbabilities, tokenCount),
+                decoder.Decode(logits, tokenCount));
+            Assert.Equal(
+                PrivacyFilter.ArgMax(logProbabilities, tokenCount, classCount),
+                PrivacyFilter.ArgMax(logits, tokenCount, classCount));
+        }
+    }
+
+    [Fact]
+    public void SparseViterbiMatchesDenseReference()
+    {
+        LabelSpace labels = LabelSpace.Create(ClassNames);
+        var decoder = new ViterbiDecoder(labels, calibrationPath: null);
+        int classCount = ClassNames.Length;
+        var random = new Random(42);
+
+        for (int testCase = 0; testCase < 64; testCase++)
+        {
+            int tokenCount = random.Next(1, 33);
+            var emissions = new float[tokenCount * classCount];
+            for (int index = 0; index < emissions.Length; index++)
+            {
+                emissions[index] = (random.NextSingle() * 20) - 10;
+            }
+
+            Assert.Equal(
+                DecodeDenseReference(emissions, tokenCount, classCount),
+                decoder.Decode(emissions, tokenCount));
+        }
+
+        var tiedEmissions = new float[8 * classCount];
+        Assert.Equal(
+            DecodeDenseReference(tiedEmissions, 8, classCount),
+            decoder.Decode(tiedEmissions, 8));
+    }
+
+    [Fact]
     public void SpanDecoderTrimsAndRedacts()
     {
         LabelSpace labels = LabelSpace.Create(ClassNames);
@@ -50,6 +112,84 @@ public sealed class DecoderTests
     }
 
     private static int ClassIndex(string name) => Array.IndexOf(ClassNames, name);
+
+    private static int[] DecodeDenseReference(float[] emissions, int tokenCount, int classCount)
+    {
+        const float invalid = -1e9f;
+        var previousScores = new float[classCount];
+        var nextScores = new float[classCount];
+        var backpointers = new int[(tokenCount - 1) * classCount];
+        for (int label = 0; label < classCount; label++)
+        {
+            previousScores[label] = emissions[label] +
+                (label == 0 || Boundary(label) is 'B' or 'S' ? 0 : invalid);
+        }
+
+        for (int token = 1; token < tokenCount; token++)
+        {
+            int emissionOffset = token * classCount;
+            int backpointerOffset = (token - 1) * classCount;
+            for (int next = 0; next < classCount; next++)
+            {
+                float bestScore = float.NegativeInfinity;
+                int bestPrevious = 0;
+                for (int previous = 0; previous < classCount; previous++)
+                {
+                    float score = previousScores[previous] +
+                        (IsValidTransition(previous, next) ? 0 : invalid);
+                    if (score > bestScore)
+                    {
+                        bestScore = score;
+                        bestPrevious = previous;
+                    }
+                }
+
+                nextScores[next] = bestScore + emissions[emissionOffset + next];
+                backpointers[backpointerOffset + next] = bestPrevious;
+            }
+
+            (previousScores, nextScores) = (nextScores, previousScores);
+        }
+
+        int lastLabel = 0;
+        float bestFinalScore = float.NegativeInfinity;
+        for (int label = 0; label < classCount; label++)
+        {
+            float score = previousScores[label] +
+                (label == 0 || Boundary(label) is 'E' or 'S' ? 0 : invalid);
+            if (score > bestFinalScore)
+            {
+                bestFinalScore = score;
+                lastLabel = label;
+            }
+        }
+
+        var path = new int[tokenCount];
+        path[^1] = lastLabel;
+        for (int token = tokenCount - 2; token >= 0; token--)
+        {
+            lastLabel = backpointers[(token * classCount) + lastLabel];
+            path[token] = lastLabel;
+        }
+
+        return path;
+    }
+
+    private static bool IsValidTransition(int previous, int next)
+    {
+        char? previousTag = Boundary(previous);
+        char? nextTag = Boundary(next);
+        if (previous == 0 || previousTag is 'E' or 'S')
+        {
+            return next == 0 || nextTag is 'B' or 'S';
+        }
+
+        return SpanLabel(previous) == SpanLabel(next) && nextTag is 'I' or 'E';
+    }
+
+    private static char? Boundary(int label) => label == 0 ? null : "BIES"[(label - 1) % 4];
+
+    private static int SpanLabel(int label) => label == 0 ? 0 : ((label - 1) / 4) + 1;
 
     private static string[] CreateClassNames()
     {
