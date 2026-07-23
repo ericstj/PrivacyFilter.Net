@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="https://raw.githubusercontent.com/ericstj/PrivacyFilter.Net/main/eng/icon.png" alt="PrivacyFilter.Net logo" width="128" height="128">
+</p>
+
 # PrivacyFilter.Net
 
 A managed C# port of the inference API and decoding pipeline from
