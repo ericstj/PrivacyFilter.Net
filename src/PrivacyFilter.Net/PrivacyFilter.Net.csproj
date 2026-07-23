@@ -13,13 +13,15 @@
 
   <PropertyGroup Label="Packaging">
     <PackageId>PrivacyFilter.Net</PackageId>
-    <Version>0.1.0</Version>
+    <Version>0.1.1</Version>
     <EnablePackageValidation>true</EnablePackageValidation>
+    <PackageValidationBaselineVersion>0.1.0</PackageValidationBaselineVersion>
     <Authors>ericstj</Authors>
     <Description>Managed .NET inference API for OpenAI Privacy Filter, using the official ONNX model with o200k_base tokenization and constrained BIOES decoding.</Description>
     <PackageTags>privacy;pii;redaction;token-classification;onnx;nlp;machine-learning</PackageTags>
     <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
     <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageIcon>icon.png</PackageIcon>
     <PackageProjectUrl>https://github.com/ericstj/PrivacyFilter.Net</PackageProjectUrl>
     <RepositoryUrl>https://github.com/ericstj/PrivacyFilter.Net</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
@@ -31,6 +33,7 @@
 
   <ItemGroup>
     <None Include="..\..\README.md" Pack="true" PackagePath="\" Link="README.md" />
+    <None Include="..\..\eng\icon.png" Pack="true" PackagePath="\" />
     <None Include="..\..\THIRD-PARTY-NOTICES.md" Pack="true" PackagePath="\" />
   </ItemGroup>
 
