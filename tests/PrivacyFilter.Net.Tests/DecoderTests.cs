@@ -85,6 +85,28 @@ public sealed class DecoderTests
     }
 
     [Fact]
+    public void TensorArgMaxMatchesScalarForFiniteScores()
+    {
+        const int tokenCount = 128;
+        int classCount = ClassNames.Length;
+        var scores = new float[tokenCount * classCount];
+        var random = new Random(42);
+        for (int index = 0; index < scores.Length; index++)
+        {
+            scores[index] = (random.NextSingle() * 20) - 10;
+        }
+
+        Assert.Equal(
+            ArgMaxScalar(scores, tokenCount, classCount),
+            PrivacyFilter.ArgMax(scores, tokenCount, classCount));
+
+        Array.Clear(scores);
+        Assert.Equal(
+            ArgMaxScalar(scores, tokenCount, classCount),
+            PrivacyFilter.ArgMax(scores, tokenCount, classCount));
+    }
+
+    [Fact]
     public void SpanDecoderTrimsAndRedacts()
     {
         LabelSpace labels = LabelSpace.Create(ClassNames);
@@ -112,6 +134,33 @@ public sealed class DecoderTests
     }
 
     private static int ClassIndex(string name) => Array.IndexOf(ClassNames, name);
+
+    private static int[] ArgMaxScalar(
+        ReadOnlySpan<float> scores,
+        int tokenCount,
+        int classCount)
+    {
+        var labels = new int[tokenCount];
+        for (int token = 0; token < tokenCount; token++)
+        {
+            int offset = token * classCount;
+            int bestLabel = 0;
+            float bestScore = scores[offset];
+            for (int label = 1; label < classCount; label++)
+            {
+                float score = scores[offset + label];
+                if (score > bestScore)
+                {
+                    bestScore = score;
+                    bestLabel = label;
+                }
+            }
+
+            labels[token] = bestLabel;
+        }
+
+        return labels;
+    }
 
     private static int[] DecodeDenseReference(float[] emissions, int tokenCount, int classCount)
     {

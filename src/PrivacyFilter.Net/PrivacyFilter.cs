@@ -1,6 +1,7 @@
 using System.Buffers;
 using Microsoft.ML.OnnxRuntime;
 using Microsoft.ML.OnnxRuntime.Tensors;
+using TensorPrimitives = System.Numerics.Tensors.TensorPrimitives;
 
 namespace PrivacyFilterNet;
 
@@ -247,20 +248,8 @@ public sealed class PrivacyFilter : IDisposable
         var labels = new int[tokenCount];
         for (int token = 0; token < tokenCount; token++)
         {
-            int offset = token * classCount;
-            int bestLabel = 0;
-            float bestScore = scores[offset];
-            for (int label = 1; label < classCount; label++)
-            {
-                float score = scores[offset + label];
-                if (score > bestScore)
-                {
-                    bestScore = score;
-                    bestLabel = label;
-                }
-            }
-
-            labels[token] = bestLabel;
+            labels[token] = TensorPrimitives.IndexOfMax(
+                scores.Slice(token * classCount, classCount));
         }
 
         return labels;
