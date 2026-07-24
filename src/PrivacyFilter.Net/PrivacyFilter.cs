@@ -132,6 +132,7 @@ public sealed class PrivacyFilter : IDisposable
         }
 
         _session.Dispose();
+        _tokenizer.Dispose();
         _disposed = true;
     }
 
