@@ -97,7 +97,39 @@ public class ManagedPostprocessingBenchmarks
     public int[] ViterbiSparse() => _decoder.Decode(_logProbabilities, TokenCount);
 
     [Benchmark]
-    public int[] ArgMax() => PrivacyFilter.ArgMax(_logProbabilities, TokenCount, _classCount);
+    public int[] ArgMaxScalar() =>
+        ArgMaxScalar(_logProbabilities, TokenCount, _classCount);
+
+    [Benchmark]
+    public int[] ArgMaxTensorPrimitives() =>
+        PrivacyFilter.ArgMax(_logProbabilities, TokenCount, _classCount);
+
+    private static int[] ArgMaxScalar(
+        ReadOnlySpan<float> scores,
+        int tokenCount,
+        int classCount)
+    {
+        var labels = new int[tokenCount];
+        for (int token = 0; token < tokenCount; token++)
+        {
+            int offset = token * classCount;
+            int bestLabel = 0;
+            float bestScore = scores[offset];
+            for (int label = 1; label < classCount; label++)
+            {
+                float score = scores[offset + label];
+                if (score > bestScore)
+                {
+                    bestScore = score;
+                    bestLabel = label;
+                }
+            }
+
+            labels[token] = bestLabel;
+        }
+
+        return labels;
+    }
 
     private static int[] DecodeDense(
         float[] emissions,
