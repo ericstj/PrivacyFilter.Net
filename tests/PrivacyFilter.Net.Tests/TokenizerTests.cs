@@ -37,7 +37,7 @@ public sealed class TokenizerTests
             JsonSerializer.Deserialize<TokenizerOracleCase[]>(
                 File.ReadAllBytes(path),
                 new JsonSerializerOptions { PropertyNameCaseInsensitive = true })!;
-        var tokenizer = new PrivacyFilterTokenizer();
+        using var tokenizer = new PrivacyFilterTokenizer();
 
         Parallel.For(
             0,
